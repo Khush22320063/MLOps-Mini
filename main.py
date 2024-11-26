@@ -1,12 +1,7 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+import streamlit as st
+import pandas as pd
 import os
 import time
-import pandas as pd
-
-# Import the backend analysis code
 from backend_analysis import (
     load_dataset,
     train_model,
@@ -16,11 +11,8 @@ from backend_analysis import (
     generate_distribution_map
 )
 
-app = FastAPI()
-
-# Set up the templates directory and static files directory
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Set up the Streamlit app
+st.set_page_config(page_title="Energy Prediction and Distribution", layout="wide")
 
 # Load the dataset and train the model once during app startup
 df = load_dataset()
@@ -29,59 +21,85 @@ model = train_model(df)
 # Global variable to store the last result file path
 last_result_file = None
 
-# Route to serve the main page
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+# Define utility functions
+def save_to_excel(df, prefix):
+    """Save DataFrame to an Excel file."""
+    global last_result_file
+    timestamp = int(time.time())
+    file_path = os.path.join("static", f"{prefix}_{timestamp}.xlsx")
+    df.to_excel(file_path, index=False)
+    last_result_file = file_path
+    return file_path
 
-# Route for energy prediction
-@app.post("/predict")
-async def predict(request: Request):
-    global last_result_file  # Track the file path globally
+# Create static directory if not exists
+os.makedirs("static", exist_ok=True)
 
-    body = await request.json()
-    date = body.get("date")
-    energy = body.get("energy")
+# Main UI
+st.title("Energy Prediction and Distribution System")
 
-    predicted_demand_df = calculate_predicted_demand(df, date, model)
-    heatmap_path = generate_prediction_map(predicted_demand_df)
+# Tabs for navigation
+tabs = st.tabs(["Energy Prediction", "Energy Distribution", "Download Results"])
 
-    # Save the predicted demand to an Excel file
-    last_result_file = os.path.join("static", f"predicted_demand_{int(time.time())}.xlsx")
-    predicted_demand_df.to_excel(last_result_file, index=False)
+# Energy Prediction Tab
+with tabs[0]:
+    st.header("Predict Energy Demand")
+    date = st.date_input("Select Date")
+    energy = st.number_input("Enter Predicted Energy (MW)", min_value=0.0, value=0.0)
 
-    # Append a timestamp to the URL to prevent caching
-    heatmap_url = f"/static/{os.path.basename(heatmap_path)}?t={int(time.time())}"
-    return JSONResponse(content={"heatmap_url": heatmap_url})
+    if st.button("Predict"):
+        if not date:
+            st.error("Please select a valid date.")
+        else:
+            predicted_demand_df = calculate_predicted_demand(df, str(date), model)
+            heatmap_path = generate_prediction_map(predicted_demand_df)
 
-# Route for energy distribution
-@app.post("/distribute")
-async def distribute(request: Request):
-    global last_result_file  # Track the file path globally
+            # Save results
+            save_to_excel(predicted_demand_df, "predicted_demand")
 
-    body = await request.json()
-    date = body.get("date")
-    energy = body.get("energy")
+            st.success("Prediction completed!")
+            st.image(heatmap_path, caption="Predicted Demand Heatmap")
+            st.download_button(
+                label="Download Prediction Results",
+                data=open(last_result_file, "rb").read(),
+                file_name=os.path.basename(last_result_file),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-    # Calculate predicted demand for the given date using the trained model
-    predicted_demand_df = calculate_predicted_demand(df, date, model)
+# Energy Distribution Tab
+with tabs[1]:
+    st.header("Distribute Energy")
+    date = st.date_input("Select Date for Distribution")
+    energy = st.number_input("Enter Total Available Energy (MW)", min_value=0.0, value=0.0)
 
-    # Distribute energy based on the predicted demand
-    allocation_result_df = distribute_energy(energy, predicted_demand_df)
+    if st.button("Distribute"):
+        if not date:
+            st.error("Please select a valid date.")
+        else:
+            predicted_demand_df = calculate_predicted_demand(df, str(date), model)
+            allocation_result_df = distribute_energy(energy, predicted_demand_df)
+            heatmap_path = generate_distribution_map(allocation_result_df)
 
-    # Save the distribution results to an Excel file
-    last_result_file = os.path.join("static", f"energy_distribution_{int(time.time())}.xlsx")
-    allocation_result_df.to_excel(last_result_file, index=False)
+            # Save results
+            save_to_excel(allocation_result_df, "energy_distribution")
 
-    # Generate the distribution heatmap
-    heatmap_path = generate_distribution_map(allocation_result_df)
+            st.success("Distribution completed!")
+            st.image(heatmap_path, caption="Energy Distribution Heatmap")
+            st.download_button(
+                label="Download Distribution Results",
+                data=open(last_result_file, "rb").read(),
+                file_name=os.path.basename(last_result_file),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-    # Return the heatmap URL to the frontend
-    return JSONResponse(content={"heatmap_url": f"/static/{os.path.basename(heatmap_path)}?t={int(time.time())}"})
-
-# Route to download the last result file
-@app.get("/download/{action}")
-async def download(action: str):
+# Download Results Tab
+with tabs[2]:
+    st.header("Download Last Results")
     if last_result_file and os.path.exists(last_result_file):
-        return FileResponse(last_result_file, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=os.path.basename(last_result_file))
-    return JSONResponse(content={"error": "No file available for download"}, status_code=404)
+        st.download_button(
+            label="Download Last Result File",
+            data=open(last_result_file, "rb").read(),
+            file_name=os.path.basename(last_result_file),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info("No results available for download.")
