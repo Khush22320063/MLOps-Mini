@@ -1,3 +1,4 @@
+streamlit
 fastapi
 uvicorn[standard]
 pandas
@@ -9,3 +10,4 @@ geopandas
 matplotlib
 jinja2
 openpyxl
+
